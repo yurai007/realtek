@@ -1,4 +1,4 @@
-This repository contains my work regarding r8169 linux driver. Motivation was preparing minimal driver (in sense of source code) which:
+This repository contains my work regarding r8169 linux driver. Actual source code is C&P from original r8169.c file and cleaned from redundant logic. Motivation was preparing minimal driver (in sense of source code) which:
 
 * works with real PCIe device RTL8111/8168
 * handle probe() procedure via insmod
