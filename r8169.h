@@ -180,117 +180,12 @@ r8169_ver5 0000:01:00.0 eth1: link up
 #define R8169_MSG_DEFAULT \
     (NETIF_MSG_DRV | NETIF_MSG_PROBE | NETIF_MSG_IFUP | NETIF_MSG_IFDOWN)
 
-
-//--------------------------------------------------------------------------------------
-
-// --dj: tracing + enriched register stores
-// assume that register value is < 2^24 (3B) so I can code R/W in MSB
-static int *tracing_buffer = NULL;
-static unsigned buffer_size = 0;
-static unsigned buffer_pos = 0;
-
-/* write/read MMIO register */
-#define RTL_W8(reg, val8)	do { \
-    int reg2 = (reg); \
-    int val8_2 = (val8); \
-    writeb ((val8_2), ioaddr + (reg2)); \
-        if(tracing_buffer != NULL) { \
-            tracing_buffer[buffer_pos++] = (0xff000000 | (reg2)); tracing_buffer[buffer_pos++] = (val8_2); } \
-    } while (0)
-
-#define RTL_W16(reg, val16)	do { \
-    int reg2 = (reg); \
-    int val16_2 = (val16); \
-    writew ((val16_2), ioaddr + (reg2)); \
-        if(tracing_buffer != NULL) { \
-            tracing_buffer[buffer_pos++] = (0xff000000 | (reg2)); tracing_buffer[buffer_pos++] = (val16_2); } \
-    } while (0)
-
-#define RTL_W32(reg, val32)	do { \
-    int reg2 = (reg); \
-    int val32_2 = (val32); \
-    writel ((val32_2), ioaddr + (reg2)); \
-        if(tracing_buffer != NULL) { \
-            tracing_buffer[buffer_pos++] = (0xff000000 | (reg2)); tracing_buffer[buffer_pos++] = (val32_2); } \
-    } while (0)
-
-
-static inline u8 my_readb(const volatile void __iomem *addr, int reg)
-{
-    const volatile u8 value = *(const volatile u8 *) addr;
-    if (tracing_buffer != NULL)
-    {
-        tracing_buffer[buffer_pos++] = reg; tracing_buffer[buffer_pos++] = (int)value;
-    }
-    return value;
-}
-
-static inline u16 my_readw(const volatile void __iomem *addr, int reg)
-{
-    const volatile u16 value = *(const volatile u16 *) addr;
-    if (tracing_buffer != NULL)
-    {
-        tracing_buffer[buffer_pos++] = reg; tracing_buffer[buffer_pos++] = (int)value;
-    }
-    return value;
-}
-
-static inline u32 my_readl(const volatile void __iomem *addr, int reg)
-{
-    const volatile u32 value = *(const volatile u32 *) addr;
-    if (tracing_buffer != NULL)
-    {
-        tracing_buffer[buffer_pos++] = reg; tracing_buffer[buffer_pos++] = (int)value;
-    }
-    return value;
-}
-
-#define RTL_R8(reg)		my_readb (ioaddr + (reg), (reg))
-#define RTL_R16(reg)		my_readw (ioaddr + (reg), (reg))
-#define RTL_R32(reg)		my_readl (ioaddr + (reg), (reg))
-
-
-#define MAX_WRITES_NUM (20480)
-#define BUFFER_SIZE (2*MAX_WRITES_NUM)
-
-static void start_tracing(void)
-{
-    tracing_buffer = kmalloc(sizeof(int)*BUFFER_SIZE, GFP_KERNEL);
-    buffer_size = BUFFER_SIZE;
-    buffer_pos = 0;
-    memset(tracing_buffer, 0, BUFFER_SIZE*sizeof(int));
-}
-
-static void stop_tracing_and_dump(void)
-{
-    dprintk("MMIO access history:");
-    int j = 0;
-    int reg;
-    for (; j < buffer_pos; j += 2)
-    {
-        reg = (tracing_buffer[j] & 0x00ffffff);
-        if ( ((tracing_buffer[j] & 0xff000000) >> 24) == 0xff)
-            dprintk("W%d: %02x := %x\n", j/2, reg, tracing_buffer[j+1]);
-        else
-        {
-            dprintk("R%d: %02x -> %x\n", j/2, reg, tracing_buffer[j+1]);
-        }
-    }
-
-    kfree(tracing_buffer);
-    tracing_buffer = NULL;
-}
-
-//--------------------------------------------------------------------------------------
-
-
-///* write/read MMIO register */
-//#define RTL_W8(reg, val8)	writeb ((val8), ioaddr + (reg))
-//#define RTL_W16(reg, val16)	writew ((val16), ioaddr + (reg))
-//#define RTL_W32(reg, val32)	writel ((val32), ioaddr + (reg))
-//#define RTL_R8(reg)         readb (ioaddr + (reg))
-//#define RTL_R16(reg)		readw (ioaddr + (reg))
-//#define RTL_R32(reg)		readl (ioaddr + (reg))
+#define RTL_W8(reg, val8)	writeb ((val8), ioaddr + (reg))
+#define RTL_W16(reg, val16)	writew ((val16), ioaddr + (reg))
+#define RTL_W32(reg, val32)	writel ((val32), ioaddr + (reg))
+#define RTL_R8(reg)         readb (ioaddr + (reg))
+#define RTL_R16(reg)		readw (ioaddr + (reg))
+#define RTL_R32(reg)		readl (ioaddr + (reg))
 
 #define RTL_EVENT_NAPI_RX	(RxOK | RxErr)
 #define RTL_EVENT_NAPI_TX	(TxOK | TxErr)

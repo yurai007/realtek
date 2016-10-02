@@ -167,7 +167,6 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
 {
     dprintk("start rtl8169_poll\n");
     struct rtl8169_private *tp = container_of(napi, struct rtl8169_private, napi);
-    //struct net_device *dev = tp->dev;
     u16 enable_mask = RTL_EVENT_NAPI | tp->event_slow;
     int work_done = 0;
     u16 status;
@@ -175,21 +174,13 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
     status = rtl_get_events(tp);
     rtl_ack_events(tp, status & ~tp->event_slow);
 
-//    if (status & RTL_EVENT_NAPI_RX)
-//        work_done = rtl_rx(dev, tp, (u32) budget);
-
-//    if (status & RTL_EVENT_NAPI_TX)
-//        rtl_tx(dev, tp);
-
     if (status & tp->event_slow) {
         enable_mask &= ~tp->event_slow;
-
         rtl_schedule_task(tp, RTL_FLAG_TASK_SLOW_PENDING);
     }
 
     if (work_done < budget) {
         napi_complete(napi);
-
         rtl_irq_enable(tp, enable_mask);
         mmiowb();
     }
