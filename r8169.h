@@ -162,23 +162,17 @@ r8169_ver5 0000:01:00.0 eth1: link up
        valid_lft forever preferred_lft forever
 */
 
-#define MODULENAME "r8169_ver6"
-#define PFX MODULENAME ": "
+#define MODULENAME "r8169_ver7"
 #define RTL8169_VERSION "2.3LK-NAPI"
+#define DEVICE_NAME "RTL8168e/8111e"
 #define ETH_ADDR_LEN 6
 #define R8169_REGS_SIZE		256
-
-#define FIRMWARE_8168E_1	"rtl_nic/rtl8168e-1.fw"
-#define FIRMWARE_8168E_2	"rtl_nic/rtl8168e-2.fw"
 
 #define JUMBO_9K	(9*1024 - ETH_HLEN - 2)
 #define RTL8169_PHY_TIMEOUT	(10*HZ)
 
 #define dprintk(fmt, args...) \
-    do { printk(KERN_DEBUG PFX fmt, ## args); } while (0)
-
-#define R8169_MSG_DEFAULT \
-    (NETIF_MSG_DRV | NETIF_MSG_PROBE | NETIF_MSG_IFUP | NETIF_MSG_IFDOWN)
+    do { printk(KERN_DEBUG MODULENAME ": " fmt, ## args); } while (0)
 
 #define RTL_W8(reg, val8)	writeb ((val8), ioaddr + (reg))
 #define RTL_W16(reg, val16)	writew ((val16), ioaddr + (reg))
@@ -202,12 +196,10 @@ enum rtl_flag {
 
 enum cfg_version {
     RTL_CFG_0 = 0x00,
-    RTL_CFG_1,
-    RTL_CFG_2
+    RTL_CFG_1
 };
 
 enum features {
-    RTL_FEATURE_WOL		= (1 << 0),
     RTL_FEATURE_MSI		= (1 << 1),
     RTL_FEATURE_GMII	= (1 << 2),
 };
@@ -247,18 +239,11 @@ enum rtl_registers {
     IntrMask	= 0x3c,
     IntrStatus	= 0x3e,
     TxConfig	= 0x40,
-    RxConfig	= 0x44,
     Cfg9346		= 0x50,
-    Config1		= 0x52,
     Config2		= 0x53,
-    Config3		= 0x54,
-    Config4		= 0x55,
-    Config5		= 0x56,
     PHYAR		= 0x60,
     PHYstatus	= 0x6c,
     CPlusCmd	= 0xe0,
-
-    MaxTxPacketSize	= 0xec,	/* 8101/8168. Unit of 128 bytes. */
 };
 
 enum rtl_tx_desc_version {
@@ -270,14 +255,6 @@ static int rtl8169_close(struct net_device *dev);
 static int rtl8169_set_speed_xmii(struct net_device *dev,
                    u16 speed, u32 adv);
 
-#define _R(NAME,TD,FW,SZ,B) {	\
-    .name = NAME,		\
-    .txd_version = TD,	\
-    .fw_name = FW,		\
-    .jumbo_max = SZ,	\
-    .jumbo_tx_csum = B	\
-}
-
 struct rtl_cfg_info {
     unsigned int region;
     unsigned int align;
@@ -285,28 +262,16 @@ struct rtl_cfg_info {
     unsigned features;
 };
 
-struct rtl_default_info {
-    const char *name;
-    enum rtl_tx_desc_version txd_version;
-    const char *fw_name;
-    u16 jumbo_max;
-    bool jumbo_tx_csum;
-};
-
 struct rtl8169_private {
     void __iomem *mmio_addr;	/* memory map physical address */
     struct pci_dev *pci_dev;
     struct net_device *dev;
     struct napi_struct napi;
+
+    // for netif_info and netif_err
     u32 msg_enable;
-    u16 cp_cmd;
-
     u16 event_slow;
-
-    uint8_t *hw_addr;
     uint16_t mac_version;
-    uint8_t dev_addr[ETH_ADDR_LEN];
-    bool stopped;
     struct timer_list timer;
 
     struct {
@@ -479,7 +444,6 @@ static int r8169_mdio_read(struct rtl8169_private *tp, int reg)
     return value;
 }
 
-/* Cfg9346_Unlock assumed. */
 static unsigned rtl_try_msi(struct rtl8169_private *tp,
                             const struct rtl_cfg_info *cfg)
 {
@@ -487,6 +451,7 @@ static unsigned rtl_try_msi(struct rtl8169_private *tp,
     unsigned msi = 0;
     u8 cfg2;
 
+    RTL_W8(Cfg9346, Cfg9346_Unlock);
     cfg2 = RTL_R8(Config2) & ~MSIEnable;
     if (cfg->features & RTL_FEATURE_MSI)
     {
@@ -500,6 +465,7 @@ static unsigned rtl_try_msi(struct rtl8169_private *tp,
             msi = RTL_FEATURE_MSI;
         }
     }
+    RTL_W8(Cfg9346, Cfg9346_Lock);
     return msi;
 }
 
@@ -538,6 +504,48 @@ static void rtl_lock_work(struct rtl8169_private *tp)
 static void rtl_unlock_work(struct rtl8169_private *tp)
 {
     mutex_unlock(&tp->wk.mutex);
+}
+
+static void rtl8169_get_mac_version(struct rtl8169_private *tp, struct net_device *dev)
+{
+    void __iomem *ioaddr = tp->mmio_addr;
+
+    static const struct rtl_mac_info
+    {
+        u32 mask;
+        u32 val;
+        int mac_version;
+    }
+    mac_info[] =
+    {
+        /* 8168E family. */
+        { 0x7c800000, 0x2c800000,	RTL_GIGA_MAC_VER_34 },
+        { 0x7cf00000, 0x2c200000,	RTL_GIGA_MAC_VER_33 },
+        { 0x7cf00000, 0x2c100000,	RTL_GIGA_MAC_VER_32 },
+        { 0x7c800000, 0x2c000000,	RTL_GIGA_MAC_VER_33 },
+        // Catch-all
+        { 0x00000000, 0x00000000,	RTL_GIGA_MAC_NONE   }
+    };
+    const struct rtl_mac_info *p = mac_info;
+    u32 reg;
+
+    reg = RTL_R32(TxConfig);
+    while ((reg & p->mask) != p->val)
+        p++;
+    tp->mac_version = p->mac_version;
+
+    if (tp->mac_version == RTL_GIGA_MAC_NONE) {
+        netif_err(tp, probe, dev, "unknown MAC\n");
+        // there is no support for default versions like VER1 or VER11 now
+    }
+}
+
+static void rtl8169_get_mac_address(struct rtl8169_private *tp, struct net_device *dev)
+{
+    void __iomem *ioaddr = tp->mmio_addr;
+    int i;
+    for (i = 0; i < ETH_ALEN; i++)
+        dev->dev_addr[i] = RTL_R8(MAC0 + i);
 }
 
 #endif
