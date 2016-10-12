@@ -162,7 +162,7 @@ r8169_ver5 0000:01:00.0 eth1: link up
        valid_lft forever preferred_lft forever
 */
 
-#define MODULENAME "r8169_ver7"
+#define MODULENAME "r8169_ver8"
 #define RTL8169_VERSION "2.3LK-NAPI"
 #define DEVICE_NAME "RTL8168e/8111e"
 #define ETH_ADDR_LEN 6
@@ -268,7 +268,6 @@ struct rtl8169_private {
     struct net_device *dev;
     struct napi_struct napi;
 
-    // for netif_info and netif_err
     u32 msg_enable;
     u16 event_slow;
     uint16_t mac_version;
