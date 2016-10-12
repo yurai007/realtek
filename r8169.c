@@ -27,17 +27,6 @@ static const struct rtl_cfg_info rtl_cfg_infos[] = {
     }
 };
 
-static const struct rtl_default_info rtl_chip_infos[] = {
-    [RTL_GIGA_MAC_VER_32] =
-        _R("RTL8168e/8111e",	RTL_TD_1, FIRMWARE_8168E_1,
-                            JUMBO_9K, false),
-    [RTL_GIGA_MAC_VER_33] =
-        _R("RTL8168e/8111e",	RTL_TD_1, FIRMWARE_8168E_2,
-                            JUMBO_9K, false)
-};
-
-#undef _R
-
 static const struct net_device_ops rtl_netdev_ops = {
     .ndo_open		= rtl_open,
     .ndo_stop		= rtl8169_close,
@@ -51,9 +40,7 @@ static const struct net_device_ops rtl_netdev_ops = {
     .ndo_set_mac_address	= NULL,
     .ndo_do_ioctl		= NULL,
     .ndo_set_rx_mode	= NULL,
-#ifdef CONFIG_NET_POLL_CONTROLLER
     .ndo_poll_controller	= NULL,
-#endif
 };
 
 static const struct pci_device_id rtl8169_pci_tbl[] = {
@@ -63,13 +50,6 @@ static const struct pci_device_id rtl8169_pci_tbl[] = {
 };
 
 MODULE_DEVICE_TABLE(pci, rtl8169_pci_tbl);
-
-int use_dac = 0;
-
-static struct {
-    u32 msg_enable;
-} debug = { -1 };
-
 
 static void rtl8169_release_board(struct pci_dev *pdev, struct net_device *dev,
                   void __iomem *ioaddr)
@@ -97,40 +77,6 @@ static void rtl_remove_one(struct pci_dev *pdev)
     dprintk("rtl_remove_one:    ok");
 }
 
-static void rtl8169_get_mac_version(struct rtl8169_private *tp, struct net_device *dev)
-{
-    void __iomem *ioaddr = tp->mmio_addr;
-
-    static const struct rtl_mac_info
-    {
-        u32 mask;
-        u32 val;
-        int mac_version;
-    }
-    mac_info[] =
-    {
-        /* 8168E family. */
-        { 0x7c800000, 0x2c800000,	RTL_GIGA_MAC_VER_34 },
-        { 0x7cf00000, 0x2c200000,	RTL_GIGA_MAC_VER_33 },
-        { 0x7cf00000, 0x2c100000,	RTL_GIGA_MAC_VER_32 },
-        { 0x7c800000, 0x2c000000,	RTL_GIGA_MAC_VER_33 },
-        // Catch-all
-        { 0x00000000, 0x00000000,	RTL_GIGA_MAC_NONE   }
-    };
-    const struct rtl_mac_info *p = mac_info;
-    u32 reg;
-
-    reg = RTL_R32(TxConfig);
-    while ((reg & p->mask) != p->val)
-        p++;
-    tp->mac_version = p->mac_version;
-
-    if (tp->mac_version == RTL_GIGA_MAC_NONE) {
-        netif_err(tp, probe, dev, "unknown MAC\n");
-        // there is no support for default versions like VER1 or VER11 now
-    }
-}
-
 static unsigned int rtl8169_xmii_reset_pending(struct rtl8169_private *tp)
 {
     return rtl_readphy(tp, MII_BMCR) & BMCR_RESET;
@@ -151,12 +97,14 @@ static void rtl8169_xmii_reset_enable(struct rtl8169_private *tp)
 
 static void rtl_schedule_task(struct rtl8169_private *tp, enum rtl_flag flag)
 {
+    dprintk("start rtl_schedule_task\n");
     if (!test_and_set_bit(flag, tp->wk.flags))
         schedule_work(&tp->wk.work);
 }
 
 static void rtl8169_phy_timer(unsigned long __opaque)
 {
+    dprintk("start rtl8169_phy_timer\n");
     struct net_device *dev = (struct net_device *)__opaque;
     struct rtl8169_private *tp = netdev_priv(dev);
 
@@ -187,44 +135,12 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
     return work_done;
 }
 
-static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+static int rtl_init_pci(struct rtl8169_private *tp, const struct rtl_cfg_info *cfg)
 {
-    unsigned id = ent->driver_data;
-    const struct rtl_cfg_info *cfg = rtl_cfg_infos + id;
     const unsigned int region = cfg->region;
-    struct rtl8169_private *tp;
-    struct mii_if_info *mii;
-    struct net_device *dev;
-    void __iomem *ioaddr;
-    int rc = 0, chipset;
-
-    dprintk("rtl_init_one: pdev = %p, ent = %p", pdev, ent);
-    dprintk("rtl_init_one  pdev: vendor = %x, device = %x, class = %x, dma_mask = %llx, enable_cnt = %d",
-            pdev->vendor, pdev->device, pdev->class, pdev->dma_mask, pdev->enable_cnt.counter);
-
-    if (netif_msg_drv(&debug)) {
-        printk(KERN_INFO "%s Gigabit Ethernet driver %s loaded\n",
-               MODULENAME, RTL8169_VERSION);
-    }
-
-    dev = alloc_etherdev(sizeof (*tp));
-    if (!dev) {
-        rc = -ENOMEM;
-        goto out;
-    }
-
-    SET_NETDEV_DEV(dev, &pdev->dev);
-    dev->netdev_ops = &rtl_netdev_ops;
-    tp = netdev_priv(dev);
-    dprintk("rtl_init_one: dev = %p, tp = %p", dev, tp);
-    tp->dev = dev;
-    tp->pci_dev = pdev;
-    tp->msg_enable = netif_msg_init(debug.msg_enable, R8169_MSG_DEFAULT);
-
-
-    mii = &tp->mii;
-    mii->supports_gmii = !!(cfg->features & RTL_FEATURE_GMII);
-
+    struct net_device *dev = tp->dev;
+    struct pci_dev *pdev = tp->pci_dev;
+    int rc = 0;
     /* disable ASPM completely as that cause random device stop working
          * problems as well as full system hangs for some PCIe devices users */
     pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 |
@@ -234,7 +150,7 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
     rc = pci_enable_device(pdev);
     if (rc < 0) {
         netif_err(tp, probe, dev, "enable failure\n");
-        goto err_out_free_dev_1;
+        goto out;
     }
     dprintk("rtl_init_one:  pci_enable_device ok");
     dprintk("rtl_init_one:  pdev: enable_cnt = %d", pdev->enable_cnt.counter);
@@ -270,31 +186,21 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
         netif_err(tp, probe, dev, "could not request regions\n");
         goto err_out_mwi_2;
     }
-    tp->cp_cmd = 0;
 
-    /* Inform about capabilities (64bit/32bit)
-     */
-    if ((sizeof(dma_addr_t) > 4) &&
-            !pci_set_dma_mask(pdev, DMA_BIT_MASK(64)) && use_dac) {
-        tp->cp_cmd |= PCIDAC;
-        dev->features |= NETIF_F_HIGHDMA;
+    /* Inform about capabilities (64bit/32bit) */
+    rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+    if (rc < 0) {
+        netif_err(tp, probe, dev, "DMA configuration failed\n");
+        goto err_out_free_res_3;
     }
-    else
-    {
-        rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
-        if (rc < 0) {
-            netif_err(tp, probe, dev, "DMA configuration failed\n");
-            goto err_out_free_res_3;
-        }
-    }
-
     /* ioremap MMIO region */
-    ioaddr = ioremap(pci_resource_start(pdev, region), R8169_REGS_SIZE);
+    void __iomem *ioaddr = ioremap(pci_resource_start(pdev, region), R8169_REGS_SIZE);
     if (!ioaddr) {
         netif_err(tp, probe, dev, "cannot remap MMIO, aborting\n");
         rc = -EIO;
         goto err_out_free_res_3;
     }
+
     tp->mmio_addr = ioaddr;
     /* show dump equivalent with cat /proc/ioports and cat /proc/iomem (which actually
        was done by kernel on startup :) */
@@ -306,10 +212,59 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
     if (!pci_is_pcie(pdev))
         netif_info(tp, probe, dev, "not PCI Express\n");
 
+out:
+    return rc;
+
+err_out_free_res_3:
+    pci_release_regions(pdev);
+err_out_mwi_2:
+    pci_clear_mwi(pdev);
+    pci_disable_device(pdev);
+    goto out;
+}
+
+static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+{
+    unsigned id = ent->driver_data;
+    const struct rtl_cfg_info *cfg = rtl_cfg_infos + id;
+
+    struct rtl8169_private *tp;
+    struct mii_if_info *mii;
+    struct net_device *dev;
+    void __iomem *ioaddr;
+    int rc = 0;
+
+    dprintk("rtl_init_one: pdev = %p, ent = %p", pdev, ent);
+    dprintk("rtl_init_one  pdev: vendor = %x, device = %x, class = %x, dma_mask = %llx, enable_cnt = %d",
+            pdev->vendor, pdev->device, pdev->class, pdev->dma_mask, pdev->enable_cnt.counter);
+
+    printk(KERN_INFO "%s Gigabit Ethernet driver %s loaded\n",
+               MODULENAME, RTL8169_VERSION);
+
+    dev = alloc_etherdev(sizeof (*tp));
+    if (!dev) {
+        rc = -ENOMEM;
+        goto out;
+    }
+
+    SET_NETDEV_DEV(dev, &pdev->dev);
+    dev->netdev_ops = &rtl_netdev_ops;
+    tp = netdev_priv(dev);
+    dprintk("rtl_init_one: dev = %p, tp = %p", dev, tp);
+    tp->dev = dev;
+    tp->pci_dev = pdev;
+    // for logging purpose from netif* macros
+    tp->msg_enable = netif_msg_init(-1, NETIF_MSG_DRV | NETIF_MSG_PROBE |
+                                    NETIF_MSG_IFUP | NETIF_MSG_IFDOWN);
+    mii = &tp->mii;
+    mii->supports_gmii = !!(cfg->features & RTL_FEATURE_GMII);
+
+    rtl_init_pci(tp, cfg);
+    ioaddr = tp->mmio_addr;
+
     /* Identify chip attached to board */
     rtl8169_get_mac_version(tp, dev);
     dprintk("mac_version = 0x%02x\n", tp->mac_version);
-
 
     rtl_irq_disable(tp);
 
@@ -318,18 +273,15 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
     pci_set_master(pdev);
 
     // handling interrupts via MSI is crucial for link up/down
-    RTL_W8(Cfg9346, Cfg9346_Unlock);
+    // unlocking/locking inside
     tp->features |= rtl_try_msi(tp, cfg);
-    RTL_W8(Cfg9346, Cfg9346_Lock);
 
     /* wk.mutex is used implicitly through rtl_lock_work/rtl_unlock_work.
        It protectes work.
      */
     mutex_init(&tp->wk.mutex);
 
-    int i;
-    for (i = 0; i < ETH_ALEN; i++)
-        dev->dev_addr[i] = RTL_R8(MAC0 + i);
+    rtl8169_get_mac_address(tp, dev);
 
     // handling NAPI is crucial for link up/down
     netif_napi_add(dev, &tp->napi, rtl8169_poll, R8169_NAPI_WEIGHT);
@@ -338,19 +290,13 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
      * properly for all devices */
     dev->features |= NETIF_F_RXCSUM |
         NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX;
-
     dev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
         NETIF_F_RXCSUM | NETIF_F_HW_VLAN_CTAG_TX |
         NETIF_F_HW_VLAN_CTAG_RX;
+    dev->hw_features |= NETIF_F_IPV6_CSUM | NETIF_F_TSO6 | NETIF_F_RXALL | NETIF_F_RXFCS;
     dev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
         NETIF_F_HIGHDMA;
-
-    dprintk("rtl_init_one: vlan_features ok\n");
-
-    dev->hw_features |= NETIF_F_IPV6_CSUM | NETIF_F_TSO6;
-    dev->hw_features |= NETIF_F_RXALL;
-    dev->hw_features |= NETIF_F_RXFCS;
-
+    dprintk("rtl_init_one: features ok\n");
     /* tp->event_slow is used for rtl_ack_events/rtl_get_events. tp->event_slow
        value is stored in IntrStatus register. Cfg->event_slow must be properly set.
     */
@@ -370,9 +316,8 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
     pci_set_drvdata(pdev, dev);
 
-    chipset = tp->mac_version;
     netif_info(tp, probe, dev, "%s at 0x%p, %pM, XID %08x IRQ %d\n",
-           rtl_chip_infos[chipset].name, ioaddr, dev->dev_addr,
+           DEVICE_NAME, ioaddr, dev->dev_addr,
            (u32)(RTL_R32(TxConfig) & 0x9cf0f8ff), pdev->irq);
 
     dprintk("rtl_init_one:  ok");
@@ -386,12 +331,11 @@ err_out_msi_4:
     netif_napi_del(&tp->napi);
     rtl_disable_msi(pdev, tp);
     iounmap(ioaddr);
-err_out_free_res_3:
+
     pci_release_regions(pdev);
-err_out_mwi_2:
+
     pci_clear_mwi(pdev);
     pci_disable_device(pdev);
-err_out_free_dev_1:
     free_netdev(dev);
     goto out;
 }
@@ -452,9 +396,8 @@ static int rtl8169_set_speed(struct net_device *dev,
 {
     dprintk("rtl8169_set_speed\n");
     struct rtl8169_private *tp = netdev_priv(dev);
-    int ret;
 
-    ret = rtl8169_set_speed_xmii(dev, speed, advertising);
+    int ret = rtl8169_set_speed_xmii(dev, speed, advertising);
     if (ret < 0)
         goto out;
 
@@ -555,23 +498,17 @@ static void rtl8169_phy_reset(struct net_device *dev,
 
 static void rtl8169_init_phy(struct net_device *dev, struct rtl8169_private *tp)
 {
-    dprintk("start rtl8169_init_phy");
-
     rtl_hw_phy_config(dev);
-
     pci_write_config_byte(tp->pci_dev, PCI_LATENCY_TIMER, 0x40);
 
     rtl8169_phy_reset(dev, tp);
-
     rtl8169_set_speed(dev, SPEED_1000,
               ADVERTISED_10baseT_Half | ADVERTISED_10baseT_Full |
               ADVERTISED_100baseT_Half | ADVERTISED_100baseT_Full |
               (tp->mii.supports_gmii ?
-               ADVERTISED_1000baseT_Half |
-               ADVERTISED_1000baseT_Full : 0)
+                    ADVERTISED_1000baseT_Half |
+                    ADVERTISED_1000baseT_Full : 0)
               );
-
-    dprintk("rtl8169_init_phy is done");
 }
 
 static void rtl8169_check_link_status(struct net_device *dev,
@@ -595,7 +532,6 @@ static void rtl8169_check_link_status(struct net_device *dev,
         if (pm)
             pm_schedule_suspend(&tp->pci_dev->dev, 5000);
     }
-    dprintk("rtl8169_check_link_status is done");
 }
 
 static void rtl8169_pcierr_interrupt(struct net_device *dev)
@@ -609,9 +545,7 @@ static void rtl_slow_event_work(struct rtl8169_private *tp)
     dprintk("start rtl_slow_event_work\n");
 
     struct net_device *dev = tp->dev;
-    u16 status;
-
-    status = rtl_get_events(tp) & tp->event_slow;
+    u16 status = rtl_get_events(tp) & tp->event_slow;
     rtl_ack_events(tp, status);
 
     if (unlikely(status & SYSErr))
@@ -646,12 +580,10 @@ static irqreturn_t rtl8169_interrupt(int irq, void *dev_instance)
     return IRQ_RETVAL(handled);
 }
 
-static void rtl_reset_work(struct rtl8169_private *tp)
-{
-    (void)tp;
-    dprintk("rtl_reset_work\n");
-}
-
+/*
+* A busy loop could burn quite a few cycles on nowadays CPU.
+* Let's delay the execution of the timer for a few ticks.
+*/
 static void rtl_phy_work(struct rtl8169_private *tp)
 {
     dprintk("start rtl_phy_work\n");
@@ -660,23 +592,14 @@ static void rtl_phy_work(struct rtl8169_private *tp)
     void __iomem *ioaddr = tp->mmio_addr;
     unsigned long timeout = RTL8169_PHY_TIMEOUT;
 
-    if (rtl8169_xmii_reset_pending(tp))
-    {
-        /*
-        * A busy loop could burn quite a few cycles on nowadays CPU.
-        * Let's delay the execution of the timer for a few ticks.
-        */
+    if (rtl8169_xmii_reset_pending(tp)) {
         timeout = HZ/10;
         goto out_mod_timer;
     }
 
     if (rtl8169_xmii_link_ok(ioaddr))
         return;
-
-    netif_dbg(tp, link, tp->dev, "PHY reset until link up\n");
     rtl8169_xmii_reset_enable(tp);
-
-    dprintk("rtl_phy_work:  ok\n");
 
 out_mod_timer:
     mod_timer(timer, jiffies + timeout);
@@ -685,37 +608,20 @@ out_mod_timer:
 static void rtl_task(struct work_struct *work)
 {
     dprintk("start rtl_task\n");
-    static const struct
-    {
-        int bitnr;
-        void (*action)(struct rtl8169_private *);
-    }
-    rtl_work[] =
-    {
-        /* XXX - keep rtl_slow_event_work() as first element. */
-        { RTL_FLAG_TASK_SLOW_PENDING,	rtl_slow_event_work },
-        { RTL_FLAG_TASK_RESET_PENDING,	rtl_reset_work },
-        { RTL_FLAG_TASK_PHY_PENDING,	rtl_phy_work }
-    };
-
-    struct rtl8169_private *tp =
-            container_of(work, struct rtl8169_private, wk.work);
+    struct rtl8169_private *tp = container_of(work, struct rtl8169_private, wk.work);
     struct net_device *dev = tp->dev;
-    int i;
 
     rtl_lock_work(tp);
 
-    if (!netif_running(dev) ||
-            !test_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags))
+    if (!netif_running(dev) || !test_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags))
         goto out_unlock;
 
-    for (i = 0; i < ARRAY_SIZE(rtl_work); i++) {
-        bool pending;
-
-        pending = test_and_clear_bit(rtl_work[i].bitnr, tp->wk.flags);
-        if (pending)
-            rtl_work[i].action(tp);
-    }
+    bool pending = test_and_clear_bit(RTL_FLAG_TASK_SLOW_PENDING, tp->wk.flags);
+    if (pending)
+        rtl_slow_event_work(tp);
+    pending = test_and_clear_bit(RTL_FLAG_TASK_PHY_PENDING, tp->wk.flags);
+    if (pending)
+        rtl_phy_work(tp);
 
 out_unlock:
     rtl_unlock_work(tp);
@@ -747,13 +653,9 @@ static int rtl_open(struct net_device *dev)
 
     // NAPI for rtl_slow_event_work
     napi_enable(&tp->napi);
-
     rtl8169_init_phy(dev, tp);
-
     rtl_irq_enable_all(tp);
-
     netif_start_queue(dev);
-
     rtl_unlock_work(tp);
 
     pm_runtime_put_noidle(&pdev->dev);
@@ -783,13 +685,10 @@ static int rtl8169_close(struct net_device *dev)
 
     rtl_lock_work(tp);
     clear_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags);
-
     rtl8169_down(dev);
-
     rtl_unlock_work(tp);
 
     cancel_work_sync(&tp->wk.work);
-
     free_irq(pdev->irq, dev);
 
     pm_runtime_put_sync(&pdev->dev);
